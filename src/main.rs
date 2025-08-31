@@ -1,25 +1,31 @@
 #![no_std]
 #![no_main]
 
+use defmt_rtt as _;
 use panic_halt as _;
 
 use rp_pico as bsp;
 
-mod button;
-mod channel;
+// mod button;
+// mod channel;
+mod executor;
 mod led;
 mod time;
 
 use bsp::entry;
 use bsp::hal::{Watchdog, clocks::init_clocks_and_plls, pac, sio};
+use core::pin::pin;
+use defmt::info;
 use time::Ticker;
 
-use crate::button::{ButtonDirection, ButtonTask};
-use crate::channel::Channel;
-use crate::led::{LedRow, LedTask};
+// use crate::button::ButtonDirection;
+// use crate::channel::{Channel, Receiver};
+use crate::led::{LedPin, LedRow, NUM_LEDS};
+use crate::time::Duration;
 
 #[entry]
 fn main() -> ! {
+    info!("Starting...");
     let mut pac = pac::Peripherals::take().expect("Peripherals already taken");
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
     let sio = sio::Sio::new(pac.SIO);
@@ -43,7 +49,7 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
-    let led_pins: LedRow = [
+    let leds: [LedPin; NUM_LEDS] = [
         pins.gpio16.into_push_pull_output().into_dyn_pin(),
         pins.gpio17.into_push_pull_output().into_dyn_pin(),
         pins.gpio18.into_push_pull_output().into_dyn_pin(),
@@ -56,29 +62,17 @@ fn main() -> ! {
         pins.gpio28.into_push_pull_output().into_dyn_pin(),
     ];
 
-    let button_l = pins.gpio10.into_pull_up_input().into_dyn_pin();
-    let button_r = pins.gpio11.into_pull_up_input().into_dyn_pin();
+    Ticker::init(pac.TIMER, &mut pac.RESETS, &clocks);
 
-    let ticker = Ticker::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    let led_task = pin!(led_task(leds));
 
-    let channel: Channel<ButtonDirection> = Channel::new();
-    let mut led_task = LedTask::new(led_pins, &ticker, channel.get_receiver());
-    let mut button_l_task = ButtonTask::new(
-        button_l,
-        &ticker,
-        button::ButtonDirection::Left,
-        channel.get_sender(),
-    );
-    let mut button_r_task = ButtonTask::new(
-        button_r,
-        &ticker,
-        button::ButtonDirection::Right,
-        channel.get_sender(),
-    );
+    executor::run_tasks(&mut [led_task]);
+}
 
+async fn led_task(leds: [LedPin; NUM_LEDS]) {
+    let mut blinker = LedRow::new(leds);
     loop {
-        led_task.poll();
-        button_l_task.poll();
-        button_r_task.poll();
+        blinker.toggle();
+        time::delay(Duration::millis(500)).await
     }
 }

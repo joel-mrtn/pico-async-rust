@@ -15,9 +15,9 @@ pub enum ButtonDirection {
     Right,
 }
 
-enum ButtonState<'a> {
+enum ButtonState {
     WaitForPress,
-    Debounce(Timer<'a>),
+    Debounce(Timer),
 }
 
 pub struct ButtonTask<'a> {
