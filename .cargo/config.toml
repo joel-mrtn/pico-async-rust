@@ -11,5 +11,5 @@ rustflags = [
 target = "thumbv6m-none-eabi"
 
 [env]
-DEFMT_LOG = "info"
+DEFMT_LOG = "debug"
 DEFMT_RTT_BUFFER_SIZE = "1024"

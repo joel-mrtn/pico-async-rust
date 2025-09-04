@@ -1,4 +1,4 @@
-use rp_pico as bsp;
+use rp_pico::{self as bsp, hal::fugit::TimerDurationU32};
 
 use bsp::hal::{
     self,
@@ -9,13 +9,15 @@ use bsp::hal::{
 };
 use core::{cell::RefCell, task::Poll};
 use critical_section::Mutex;
+use defmt::{debug, info};
+use heapless::Vec;
 
 use crate::executor::{ExtWaker, wake_task};
 
 pub type Instant = TimerInstantU64<1_000_000>;
 pub type Duration = TimerDurationU64<1_000_000>;
 
-static NEXT_DEADLINE: Mutex<RefCell<Option<(u64, usize)>>> = Mutex::new(RefCell::new(None));
+static NEXT_DEADLINES: Mutex<RefCell<Vec<(u64, usize), 8>>> = Mutex::new(RefCell::new(Vec::new()));
 
 enum TimerState {
     Init,
@@ -39,12 +41,31 @@ impl Timer {
         let deadline = self.end_time.duration_since_epoch().ticks();
 
         critical_section::with(|cs| {
-            *NEXT_DEADLINE.borrow_ref_mut(cs) = Some((deadline, task_id));
+            let mut deadlines = NEXT_DEADLINES.borrow_ref_mut(cs);
+            if deadlines.push((deadline, task_id)).is_err() {
+                panic!("Too many concurrent timers!");
+            }
+
             let ticker = &mut TICKER.borrow_ref_mut(cs);
             let ticker = ticker.as_mut().unwrap();
+            let now = ticker.timer.get_counter().ticks();
 
-            ticker.alarm0.schedule_at(self.end_time).unwrap();
-            ticker.alarm0.enable_interrupt();
+            let min_deadline = deadlines
+                .iter()
+                .filter(|&&(dl, _)| dl > now)
+                .map(|&(dl, _)| dl)
+                .min();
+
+            ticker.alarm0.clear_interrupt();
+            if let Some(min_dl) = min_deadline {
+                let duration_ticks = min_dl.saturating_sub(now);
+                if duration_ticks > u32::MAX as u64 {
+                    panic!("Timer duration too large for u32!");
+                }
+                let duration = TimerDurationU32::from_ticks(duration_ticks as u32);
+                ticker.alarm0.schedule(duration).unwrap();
+                ticker.alarm0.enable_interrupt();
+            }
         });
     }
 }
@@ -92,7 +113,7 @@ impl Ticker {
             *TICKER.borrow_ref_mut(cs) = Some(Ticker { timer, alarm0 });
         });
 
-        unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0) };
+        unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0) }
     }
 
     pub fn now() -> Instant {
@@ -102,14 +123,48 @@ impl Ticker {
 
 #[interrupt]
 fn TIMER_IRQ_0() {
-    critical_section::with(|cs| {
-        if let Some((_deadline, task_id)) = NEXT_DEADLINE.borrow_ref_mut(cs).take() {
-            wake_task(task_id);
-        }
+    info!("TIMER INTERRUPT: timer deadline reached!");
 
+    critical_section::with(|cs| {
         let ticker = &mut TICKER.borrow_ref_mut(cs);
         let ticker = ticker.as_mut().unwrap();
+        let now = ticker.timer.get_counter().ticks();
+
+        let mut deadlines = NEXT_DEADLINES.borrow_ref_mut(cs);
+        let mut to_wake: Vec<usize, 8> = Vec::new();
+        let mut remaining: Vec<(u64, usize), 8> = Vec::new();
+
+        for &(dl, tid) in deadlines.iter() {
+            if dl <= now {
+                debug!("TIMER INTERRUPT: wake task with ID = {}", tid);
+                to_wake.push(tid).ok();
+            } else {
+                remaining.push((dl, tid)).ok();
+            }
+        }
+
+        *deadlines = remaining;
+
+        for tid in to_wake {
+            wake_task(tid);
+        }
 
         ticker.alarm0.clear_interrupt();
+
+        // Reschedule next min if any
+        let min_deadline = deadlines
+            .iter()
+            .filter(|&&(dl, _)| dl > now)
+            .map(|&(dl, _)| dl)
+            .min();
+        if let Some(min_dl) = min_deadline {
+            let duration_ticks = min_dl.saturating_sub(now);
+            if duration_ticks > u32::MAX as u64 {
+                panic!("Timer duration too large for u32!");
+            }
+            let duration = TimerDurationU32::from_ticks(duration_ticks as u32);
+            ticker.alarm0.schedule(duration).unwrap();
+            ticker.alarm0.enable_interrupt();
+        }
     });
 }

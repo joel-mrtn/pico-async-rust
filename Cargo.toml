@@ -12,8 +12,14 @@ defmt-rtt = "1.0"
 embedded-hal = "1.0"
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
 heapless = { version = "0.9", features = ["portable-atomic", "portable-atomic-critical-section"] }
-panic-halt = "1.0"
+panic-probe = { version = "1.0", features = ["print-rtt"] }
 rp-pico = { version = "0.9", features = ["critical-section-impl"] }
+
+[profile.release]
+debug = 2
+codegen-units = 1
+lto = "fat"
+opt-level = 'z'
 
 [[bin]]
 name = "pico-async-rust"

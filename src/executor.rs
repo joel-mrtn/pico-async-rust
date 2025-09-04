@@ -6,12 +6,9 @@ use core::{
 };
 
 use cortex_m::asm;
+use defmt::{debug, error, info};
 use heapless::mpmc::Queue;
 
-/// An alternative to storing the waker: just extract the task information
-/// you're looking for via an extension trait that you can implement for `Waker`
-/// Not a great general solution if you want to be compatible with other
-/// executors, but for this project it's fine.
 pub trait ExtWaker {
     fn task_id(&self) -> usize;
 }
@@ -28,8 +25,7 @@ impl ExtWaker for Waker {
 }
 
 fn get_waker(task_id: usize) -> Waker {
-    // SAFETY:
-    // Data argument interpreted as an integer, not dereferenced
+    // SAFETY: data argument interpreted as an integer, not dereferenced
     unsafe { Waker::from_raw(RawWaker::new(task_id as *const (), &VTABLE)) }
 }
 
@@ -50,6 +46,7 @@ unsafe fn wake_by_ref(p: *const ()) {
 }
 
 pub fn wake_task(task_id: usize) {
+    debug!("EXECUTOR: waking task {}", task_id);
     if TASK_ID_READY.enqueue(task_id).is_err() {
         // Being unable to wake a task will likely cause it to become
         // permanently unresponsive.
@@ -57,7 +54,7 @@ pub fn wake_task(task_id: usize) {
     }
 }
 
-static TASK_ID_READY: Queue<usize, 2> = Queue::new();
+static TASK_ID_READY: Queue<usize, 4> = Queue::new();
 static NUM_TASKS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn run_tasks(tasks: &mut [Pin<&mut dyn Future<Output = ()>>]) -> ! {
@@ -71,12 +68,15 @@ pub fn run_tasks(tasks: &mut [Pin<&mut dyn Future<Output = ()>>]) -> ! {
     loop {
         while let Some(task_id) = TASK_ID_READY.dequeue() {
             if task_id >= tasks.len() {
+                error!("EXECUTOR: bad task id {}", task_id);
                 continue;
             }
+            debug!("EXECUTOR: running task {}", task_id);
             let _ = tasks[task_id]
                 .as_mut()
                 .poll(&mut Context::from_waker(&get_waker(task_id)));
         }
+        info!("EXECUTOR: no tasks ready, going to sleep...");
         asm::wfi();
     }
 }
