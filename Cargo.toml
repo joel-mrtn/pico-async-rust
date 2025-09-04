@@ -1,19 +1,9 @@
-[package]
-name = "pico-async-rust"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-cortex-m = "0.7"
-cortex-m-rt = "0.7"
-critical-section = "1.2"
-defmt = "1.0"
-defmt-rtt = "1.0"
-embedded-hal = "1.0"
-futures = { version = "0.3", default-features = false, features = ["async-await"] }
-heapless = { version = "0.9", features = ["portable-atomic", "portable-atomic-critical-section"] }
-panic-probe = { version = "1.0", features = ["print-rtt"] }
-rp-pico = { version = "0.9", features = ["critical-section-impl"] }
+[workspace]
+members = [
+    "custom-async",
+    "embassy-async",
+]
+resolver = "2"
 
 [profile.release]
 debug = 2
@@ -21,8 +11,3 @@ codegen-units = 1
 lto = "fat"
 opt-level = 'z'
 
-[[bin]]
-name = "pico-async-rust"
-path = "src/main.rs"
-test = false
-bench = false
